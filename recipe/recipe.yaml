@@ -1,7 +1,7 @@
 context:
   name: decord2
   version: "3.4.0"
-  build_number: 1
+  build_number: 2
   # Shell/variable references rendered per target platform, so a single script list works on both Unix (bash) and Windows (cmd.exe) without duplicated branches.
   prefix: ${{ "%LIBRARY_PREFIX%" if win else "$PREFIX" }}
   cmake_args: ${{ "%CMAKE_ARGS%" if win else "${CMAKE_ARGS}" }}
@@ -14,6 +14,14 @@ context:
   cuda_arch_flag: ${{ ("-DCMAKE_CUDA_ARCHITECTURES=" ~ ("%CUDAARCHS%" if win else "$CUDAARCHS")) if (cuda_compiler_version | default("None")) != "None" else "" }}
   # On Windows nvcuvid.lib is absent from the CUDA toolkit, so an import library is synthesized from the bundled .def and passed to CMake, which otherwise fails the NVDEC lookup.
   nvcuvid_lib_flag: ${{ "-DCUDA_NVCUVID_LIBRARY=%SRC_DIR%/nvcuvid.lib" if (win and use_cuda == "ON") else "" }}
+  # Human-readable build string suffix that tells the CPU and CUDA builds of the compiled packages apart (e.g. "cpu" or "cuda129").
+  cuda_build_string: ${{ "cpu" if (cuda_compiler_version | default("None")) == "None" else "cuda" + (cuda_compiler_version | replace(".", "")) }}
+  # Solver penalty for the CPU variant (1) so the CUDA build (0) is preferred when both are installable.
+  # Combined with the __cuda run constraint on libdecord2, this yields CUDA-preferred selection with a graceful fallback to CPU on machines without a GPU driver.
+  cuda_variant_priority: ${{ 1 if (cuda_compiler_version | default("None")) == "None" else 0 }}
+  # Inside an output build.string the build_number name resolves to a built-in that is not the effective build number,
+  # so capture the context value here to embed it in the custom build strings below.
+  build_number_string: ${{ build_number }}
 
 recipe:
   name: decord2
@@ -85,11 +93,25 @@ outputs:
       name: libdecord2
     inherit: decord2-build
     build:
+      # Explicit build string suffix to tell the CPU and CUDA builds apart, plus the variant priority
+      # that makes the solver prefer the CUDA build while __cuda (below) keeps it off driver-less machines.
+      string: ${{ cuda_build_string }}_h${{ hash }}_${{ build_number_string }}
+      variant:
+        use_keys:
+          - cuda_compiler_version
+        down_prioritize_variant: ${{ cuda_variant_priority }}
       # The runtime package ships only the shared library.
       # The other platform's glob simply matches nothing.
       files:
         - lib/libdecord.*
         - Library/bin/decord.dll
+    requirements:
+      run:
+        - if: cuda_compiler_version != "None"
+          then:
+            # The __cuda virtual package acts as a hardware lock: it keeps the prioritized CUDA build off
+            # CPU-only machines, forcing a graceful fallback to the CPU build.
+            - __cuda
     # ffmpeg and, when enabled, the CUDA runtime libraries are linked by libdecord and pinned into
     # this package by the run_exports inherited from the staging host dependencies.
     # No run_exports are declared here: downstream code builds against libdecord2-devel (headers),
@@ -103,6 +125,13 @@ outputs:
       name: libdecord2-devel
     inherit: decord2-build
     build:
+      # Match the runtime build string so the CPU and CUDA development packages are distinguishable and
+      # track their libdecord2 counterpart (pinned exact below).
+      string: ${{ cuda_build_string }}_h${{ hash }}_${{ build_number_string }}
+      variant:
+        use_keys:
+          - cuda_compiler_version
+        down_prioritize_variant: ${{ cuda_variant_priority }}
       # The development package ships the headers and the CMake package config (plus the Windows import library).
       # Non-matching globs are ignored on the other platforms.
       files:
