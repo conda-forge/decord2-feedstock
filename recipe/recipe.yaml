@@ -1,7 +1,7 @@
 context:
   name: decord2
   version: "3.4.0"
-  build_number: 0
+  build_number: 1
   # Shell/variable references rendered per target platform, so a single script list works on both Unix (bash) and Windows (cmd.exe) without duplicated branches.
   prefix: ${{ "%LIBRARY_PREFIX%" if win else "$PREFIX" }}
   cmake_args: ${{ "%CMAKE_ARGS%" if win else "${CMAKE_ARGS}" }}
